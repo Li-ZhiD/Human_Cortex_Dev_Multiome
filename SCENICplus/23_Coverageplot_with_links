@@ -1,0 +1,154 @@
+library(Signac)
+library(Seurat)
+library(EnsDb.Hsapiens.v86)
+library(BSgenome.Hsapiens.UCSC.hg38)
+
+set.seed(1234)
+work_dir <- '/tank/data2/cw/multiome_brain_processed/misc/scenic/scenicplus/scenicplus_2nden/'
+plot_dir <- '/tank/data2/cw/multiome_brain_processed/misc/scenic/scenicplus/scenicplus_2nden/'
+setwd(work_dir)
+lev=fread("/tank/data2/cw/multiome_brain_processed/misc/type2color.txt",sep="\t",header=T)
+lev=as.data.frame(lev)
+row.names(lev)=lev$type
+r2g_links <- read.table(
+  paste0(work_dir, '/r2g.rho.bed'), sep = '\t', skip = 1,
+  col.names = c('chrom', 'chromStart', 'chromEnd', 'name', 'score', 'value', 'exp',
+                'color', 'sourceChrom', 'sourceStart', 'sourceEnd', 'sourceName',
+                'sourceStrand', 'targetChrom', 'targetStart', 'targetEnd', 'targetName',
+                'targetStrand'))
+cell_index=read.table("./cell_index",sep="\t",header=T)$X0
+
+cell_metadata <-brain@meta.data[cell_index,]
+#rownames(cell_metadata) = cell_metadata$ACC_barcode
+DefaultAssay(brain) <- 'ATAC'
+
+library(GenomicRanges)
+r2g_links <- transform(r2g_links, start_ = pmin(sourceStart, targetEnd))
+r2g_links <- transform(r2g_links, end_ = pmax(sourceStart, targetEnd))
+r2g_links <- r2g_links[c('chrom', 'start_', 'end_', 'targetName', 'value', 'chrom', 'chromStart', 'chromEnd')]
+colnames(r2g_links) <- c('seqnames', 'start', 'end', 'gene', 'score', 'chrom', 'chromStart', 'chromEnd')
+
+eRegulon_regions <- read.table(paste0(work_dir, '/eRegulons.bed'), sep = '\t')
+colnames(eRegulon_regions) <- c('seqnames', 'start', 'end', 'name')
+
+idents=c("RG-vRG","EN-L4-IT","IN-MGE-PV")
+color_dict = lev[idents,'color']
+names(color_dict)=idents
+selected_eRegulons <- c('TCF7L1_+_+', 'SMAD3_+_+', 'MAF_+_+','TCF7L2_+_+','PRDM1_+_+','GLIS1_+_+')
+
+color_dict_eRegulons = c(
+  'TCF7L1_+_+' = 'Red','TCF7L2_+_+'='Pink','PRDM1_+_+'="Purple",  
+  'SMAD3_+_+' = 'Green','GLIS1_+_+'='Grey',  
+  'MAF_+_+' = 'Blue')
+#bw_PAX5 <- '/staging/leuven/stg_00002/lcb/cbravo/Multiomics_pipeline/analysis/DPCL/data/ChIP-seq/bigwig/GM12878_PAX5_ENCFF702MTT.bigWig'
+#bw_EBF1 <- '/staging/leuven/stg_00002/lcb/cbravo/Multiomics_pipeline/analysis/DPCL/data/ChIP-seq/bigwig/GM12878_EBF1_ENCFF107LDM.bigWig'
+#bw_POU2F2 <- '/staging/leuven/stg_00002/lcb/sdewin/PhD/papers/SCENICPLUS_BravoDeWinter_etal_2022/Figure_pbmc/v3_clustered_consensus/data/ENCFF803HIP.bigWig'
+
+library(dplyr)
+eRegulon_regions <- subset(eRegulon_regions, name %in% selected_eRegulons)
+eRegulon_regions <- eRegulon_regions[order(eRegulon_regions$name), ]
+eRegulon_regions <- eRegulon_regions %>%
+  group_by(seqnames, start, end) %>%
+  mutate(name = paste0(name, collapse = ", "))
+gr_eRegulon_regions <- makeGRangesFromDataFrame(eRegulon_regions, keep.extra.columns = TRUE)
+r2g_links_gene <- subset(r2g_links, gene == "SOX9")
+r2g_links_gr <- makeGRangesFromDataFrame(subset(r2g_links_gene, chromStart %in% 
+            eRegulon_regions$start)[c('seqnames', 'start', 'end', 'gene', 'score')], keep.extra.columns = TRUE)
+Links(brain2) <- r2g_links_gr
+
+PR <- promoters(genes(TxDb.Hsapiens.UCSC.hg38.knownGene),downstream=1000,upstream = 4000)
+
+genes_to_plot=c("SOX9",'GLI3','RBFOX1','ADGRV1')
+##getBM
+library(biomaRt)
+genes <- genes(TxDb.Hsapiens.UCSC.hg38.knownGene)
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+bm <- getBM(attributes = c("external_gene_name",'entrezgene_id'), values=names(genes),filters ='entrezgene_id', mart = mart)
+names(genes) <- bm$external_gene_name[match(genes$gene_id,bm$entrezgene_id)]
+PR <- promoters(genes,downstream=30000,upstream = 30000)
+
+"""gene_to_region_of_interest = c(
+  'HES5' = 'chr10-26215882-26438700',
+  'GLI3' = 'chr7-42207555-42267555',
+  'PARD3B' ='chr2-204515475-204575475',
+  'RBFOX1' = 'chr16-5989024-6049024',
+  'TESPA1' = 'chr12-54934762-55014762',
+  'SOX9'= 'chr17-72091020-72151020',
+  'ADGRV1' = 'chr5-90528797-90588797')
+"""
+gene_to_region_of_interest = c(
+  'GAD2' = 'chr10-26215882-26438700',
+  'TESPA1' = 'chr12-54934762-55014762',
+  'SEMA5A' = 'chr3-122936059-123111559')
+gene_to_region_of_interest = c('SEMA5A' = 'chr5-9194312-9654432')
+#brain2=subset(brain,subset=type %in% idents)
+library(ggplot2)
+library(RColorBrewer)
+for(gene in names(gene_to_region_of_interest)) {
+  print(gene)
+  #region = GRangesToString(PR[gene], sep = c("-", "-"))
+  region=as.character(gene_to_region_of_interest[gene])
+  eRegulon_regions <- eRegulon_regions[eRegulon_regions[['name']] %in% selected_eRegulons, ]
+  eRegulon_regions <- eRegulon_regions[order(eRegulon_regions$name), ]
+  eRegulon_regions <- eRegulon_regions %>%
+    group_by(seqnames, start, end) %>%
+    mutate(name = paste0(name, collapse = ", "))
+  gr_eRegulon_regions <- makeGRangesFromDataFrame(eRegulon_regions, keep.extra.columns = TRUE)
+  r2g_links_gene <- r2g_links[r2g_links[['gene']] == gene, ]
+  #r2g_links_gr <- makeGRangesFromDataFrame(r2g_links_gene[r2g_links_gene[['chromStart']] %in% eRegulon_regions$start,][c('seqnames', 'start', 'end', 'gene', 'score')], keep.extra.columns = TRUE)
+  r2g_links_gr <- makeGRangesFromDataFrame(r2g_links_gene[c('seqnames', 'start', 'end', 'gene', 'score')], keep.extra.columns = TRUE)
+  Links(brain2) <- r2g_links_gr
+  peak_plot <- PeakPlot(
+    object = brain2,
+    region = region,
+    peaks = gr_eRegulon_regions,
+    group.by = 'name'
+  ) & scale_fill_manual(values=color_dict_eRegulons)
+  cov_plot <- CoveragePlot(
+    object = brain,
+    region = region,
+    group.by = 'type',idents = idents,
+    annotation = FALSE,
+    peaks = FALSE,
+    links=FALSE,
+    bigwig.scale = 'separate'
+  )  & scale_fill_manual(values=color_dict)
+  cov_plot_wo_bw <- CoveragePlot(
+    object = brain2,
+    region = region,
+    group.by = 'type',
+    annotation = FALSE,
+    peaks = FALSE,
+    links=FALSE
+  )  & scale_fill_manual(values=color_dict)
+  expr_plot <- ExpressionPlot(object = brain2, features = c(gene),
+  assay = 'RNA',group.by = 'type') & scale_fill_manual(values=color_dict)
+  # Annotation
+  gene_plot <- AnnotationPlot(
+    object = brain2,
+    region = region)
+  # Links
+  link_plot <- LinkPlot(
+    object = brain2,
+    region = region,
+    min.cutoff = -1) + scale_colour_gradientn(colours = brewer.pal(n = 9, name = "Blues"), limits=c(0, NA))
+  library(patchwork)
+  p <- CombineTracks(
+    plotlist = list(cov_plot, peak_plot, link_plot, gene_plot),
+    heights = c(5, 1, 1, 1),
+    widths = c(10,4)
+  )
+  pdf(paste0(plot_dir, paste0('/R_R2G_', gene, '.pdf')))
+  print(p)
+  dev.off()	
+  p <- CombineTracks(
+    plotlist = list(cov_plot_wo_bw, peak_plot, link_plot, gene_plot),
+    expression.plot = expr_plot,
+    heights = c(5, 1, 1, 1),
+    widths = c(10,4))
+  pdf(paste0(plot_dir, paste0('/R_R2G_', gene, '_w_expr.pdf')))
+  print(p)
+  dev.off()
+}
+
+saveRDS(pbmc, paste0(work_dir, 'SIGNAC_obj.RDS'))
