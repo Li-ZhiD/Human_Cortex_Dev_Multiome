@@ -34,12 +34,14 @@ for (i in 1:length(files)){
 for (i in 1:length(files)){counts <- Read10X_h5(paste0(dir,files[i],"/outs/filtered_feature_bc_matrix.h5"))
 	obj_list[[i]] <- CreateSeuratObject(counts = counts$`Gene Expression`, project = files[i], min.cells = 3, min.features = 10,assay="RNA",meta.data=metric_list[[i]])
 	obj_list[[i]]$dataset <- files[i]
+	obj_list[[i]] <- CellCycleScoring(obj_list[[i]],s.genes,g2m.genes)
+	obj_list[[i]]$CCD <- obj_list[[i]]$S.Score - obj_list[[i]]$G2M.Score
 	obj_list[[i]][["percent.mt"]] <- PercentageFeatureSet(obj_list[[i]], pattern = "^MT-")
 	obj_list[[i]]@meta.data$barcode <- rownames(obj_list[[i]]@meta.data)
 	obj_list[[i]] <- RenameCells(obj_list[[i]],add.cell.id=files[i])
 }
 
-obj_list <- lapply(X = obj_list, FUN = SCTransform, method = "glmGamPoi")
+obj_list <- lapply(X = obj_list, FUN = SCTransform, method = "glmGamPoi",vars.to.regress='CCD')
 features <- SelectIntegrationFeatures(obj_list, nfeatures = 3000)
 obj_list <- PrepSCTIntegration(object.list = obj_list, anchor.features = features)
 obj_list <- lapply(X = obj_list, FUN = RunPCA, features = features)
